@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Digital Assistant</string>
+    
+    <string name="accessibility_service_description">Reads screen content for translation and assistance.</string>
+</resources>
