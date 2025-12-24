@@ -6,7 +6,8 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:flutter/services.dart';
 import 'overlay_bubble.dart';
 import 'dashboard_page.dart';
-import 'services/ocr_service.dart'; // <--- NEW: Import your OCR Service
+import 'services/ocr_service.dart'; 
+import 'services/api_service.dart'; // <--- NEW: Import the Backend Bridge
 
 @pragma("vm:entry-point")
 void overlayMain() {
@@ -23,7 +24,7 @@ void main() async {
   runApp(const MyApp());
 
   // ✅ THE WORMHOLE FIX (Restored)
-  // This keeps the connection alive even if Vivo tries to sleep the app
+  // This keeps the connection alive even if Vivo/Asus tries to sleep the app
   _setupPort();
 }
 
@@ -39,15 +40,15 @@ void _setupPort() {
   // Listen for messages from the Bubble
   port.listen((message) async {
     if (message == "StartScan") {
-      await _performHybridScan(); // <--- UPDATED: Calls the new Hybrid function
+      await _performHybridScan(); // Calls the Hybrid function
     }
   });
 }
 
-// --- HYBRID BACKGROUND LOGIC (Text + OCR) ---
+// --- HYBRID BACKGROUND LOGIC (Text + OCR + Backend) ---
 Future<void> _performHybridScan() async {
   const platform = MethodChannel('com.example.digital_assistant/accessibility');
-  StringBuffer finalResult = StringBuffer(); // Buildup the final text here
+  StringBuffer scannedTextBuffer = StringBuffer(); // Collects raw English text
 
   try {
     print("Main App: Starting Hybrid Scan...");
@@ -64,9 +65,9 @@ Future<void> _performHybridScan() async {
       );
       
       if (layoutText.isNotEmpty && layoutText.length > 5) {
-        finalResult.writeln("--- LAYOUT TEXT ---");
-        finalResult.writeln(layoutText);
-        finalResult.writeln("\n");
+        scannedTextBuffer.writeln("--- LAYOUT TEXT ---");
+        scannedTextBuffer.writeln(layoutText);
+        scannedTextBuffer.writeln("\n");
       }
     } catch (e) {
       print("Layout Scan Error: $e");
@@ -85,8 +86,8 @@ Future<void> _performHybridScan() async {
         String imageText = await OcrService.processImage(imagePath);
         
         if (imageText.isNotEmpty) {
-          finalResult.writeln("--- IMAGE TEXT ---");
-          finalResult.writeln(imageText);
+          scannedTextBuffer.writeln("--- IMAGE TEXT ---");
+          scannedTextBuffer.writeln(imageText);
         } else {
           print("Main App: OCR found no text pixels.");
         }
@@ -95,22 +96,36 @@ Future<void> _performHybridScan() async {
       }
     } catch (e) {
       print("OCR Error: $e");
-      finalResult.writeln("[Image reading skipped: $e]");
+      scannedTextBuffer.writeln("[Image reading skipped: $e]");
     }
+
+    // --- STEP 3: SEND TO BACKEND & TRANSLATE (NEW LOGIC) ---
+    String rawEnglish = scannedTextBuffer.toString();
+
+    // Check if we actually found any text
+    if (rawEnglish.trim().isEmpty) {
+      print("Main App: No text found.");
+      await FlutterOverlayWindow.shareData("RESULT:No text found on screen.");
+      return;
+    }
+
+    print("Main App: Sending ${rawEnglish.length} chars to Backend...");
+    
+    // Optional: Tell the user we are working (Updates the bubble text)
+    await FlutterOverlayWindow.shareData("RESULT:Translating...\n(Please wait)");
+
+    // CALL THE API (Sends text to Laptop -> Gemini/Offline -> Back)
+    String translatedResult = await ApiService.sendToBackend(rawEnglish);
+
+    print("Main App: Translation received.");
+    
+    // Send the FINAL MALAYALAM RESULT to the bubble
+    await FlutterOverlayWindow.shareData("RESULT:$translatedResult");
 
   } catch (e) {
     print("Main App General Error: $e");
-    finalResult.write("Error: Could not scan screen.");
+    await FlutterOverlayWindow.shareData("RESULT:Error: Could not scan screen.\n$e");
   }
-
-  // --- STEP 3: SEND COMBINED RESULT ---
-  String response = finalResult.toString();
-  if (response.isEmpty) response = "No text found on screen.";
-
-  print("Main App: Sending response (${response.length} chars)");
-  
-  // Send back to the bubble to display in the list
-  await FlutterOverlayWindow.shareData("RESULT:$response");
 }
 
 class MyApp extends StatelessWidget {

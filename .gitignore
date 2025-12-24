@@ -1,3 +1,6 @@
+# ==========================
+# FLUTTER / DART / VS CODE
+# ==========================
 # Miscellaneous
 *.class
 *.log
@@ -18,10 +21,8 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -43,3 +44,37 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Windows build files (Consolidated here)
+windows/flutter/ephemeral/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+windows/x64/
+windows/x86/
+*.[Cc]ache
+!*.[Cc]ache/
+
+# ==========================
+# BACKEND (DJANGO & PYTHON)
+# ==========================
+# 1. Virtual Environment (HUGE folder - Must Ignore)
+venv/
+env/
+.venv/
+
+# 2. Python compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 3. Environment Variables (SECURITY RISK - Must Ignore)
+.env
+.env.local
+
+# 4. Local Database (Optional: Usually ignored if you want fresh DBs)
+db.sqlite3
+
+# 5. NLLB Models (Huge files, if cached locally in project)
+models/
