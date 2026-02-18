@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:flutter_tts/flutter_tts.dart'; // <--- 1. NEW IMPORT
 
 class OverlayBubble extends StatefulWidget {
   const OverlayBubble({super.key});
@@ -17,6 +18,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   bool _isLoading = false;
   List<String> _resultLines = [];
   
+  // --- NEW: TTS ENGINE ---
+  final FlutterTts _flutterTts = FlutterTts(); // <--- 2. TTS ENGINE
+  
   StreamSubscription? _subscription;
   Timer? _safetyTimer;
 
@@ -30,17 +34,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
         final rawText = data.replaceFirst("RESULT:", "");
         
         if (mounted) {
-          // --- STEP 1: RESIZE THE WINDOW FIRST ---
-          // We tell Android: "Make the window big (340x480) NOW."
           await FlutterOverlayWindow.resizeOverlay(340, 480, true);
-          
-          // --- STEP 2: WAIT FOR THE RESIZE ---
-          // We give the phone 100ms to actually stretch the window.
-          // This prevents the "RenderFlex Overflow" crash.
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 200));
 
-          // --- STEP 3: SHOW THE UI ---
-          // Now that the window is big, it is safe to draw the list.
           setState(() {
             _isLoading = false;
             
@@ -51,9 +47,11 @@ class _OverlayBubbleState extends State<OverlayBubble> {
               lines.add("... (List truncated for safety)");
             }
             _resultLines = lines;
-            
             _isWindowMode = true; // Switch UI mode
           });
+          
+          // Optional: Auto-speak when window opens (Uncomment if needed)
+          // _speak(rawText);
         }
       }
     });
@@ -63,19 +61,30 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   void dispose() {
     _subscription?.cancel();
     _safetyTimer?.cancel();
+    _flutterTts.stop(); // <--- 3. CLEANUP VOICE
     super.dispose();
+  }
+
+  // --- NEW: SPEAK FUNCTION ---
+  Future<void> _speak(String text) async {
+    if (text.isEmpty) return;
+    
+    // Configure Voice settings for Elderly
+    await _flutterTts.setLanguage("ml-IN"); // Malayalam
+    await _flutterTts.setSpeechRate(0.4);   // Slower speed
+    await _flutterTts.setPitch(1.0);
+    
+    await _flutterTts.speak(text);
   }
 
   Future<void> _handleTap() async {
     if (_isLoading) return;
     setState(() => _isLoading = true);
     
-    // Send signal to Main App via "Wormhole"
     final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
     if (mainAppPort != null) {
       mainAppPort.send("StartScan");
       
-      // Safety Timer: 8 seconds because OCR is slow
       _safetyTimer = Timer(const Duration(seconds: 8), () {
         if (mounted && _isLoading) {
           _showError("Timeout. Service might be OFF.\nGo to Settings -> Accessibility.");
@@ -86,7 +95,6 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     }
   }
 
-  // Updated _showError to use the safe resize logic too
   Future<void> _showError(String message) async {
     await FlutterOverlayWindow.resizeOverlay(340, 480, true);
     await Future.delayed(const Duration(milliseconds: 100));
@@ -101,25 +109,27 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   }
 
   void _closeWindow() {
+    _flutterTts.stop(); // Stop speaking if closed
     setState(() {
       _isWindowMode = false;
       _resultLines.clear();
     });
-    // Shrink back to small bubble size
     FlutterOverlayWindow.resizeOverlay(90, 90, true);
   }
 
   @override
   Widget build(BuildContext context) {
     // -----------------------------------------------------------
-    // MODE 1: THE RESULT WINDOW (Fixed 320x460 Container)
+    // MODE 1: THE RESULT WINDOW
     // -----------------------------------------------------------
     if (_isWindowMode) {
+      // Helper: Join lines back into one string for speaking
+      String fullTextToSpeak = _resultLines.join(" ");
+
       return Material(
-        color: Colors.transparent, // Transparent background
+        color: Colors.transparent,
         child: Center(
           child: Container(
-            // Dimensions match the resizeOverlay call
             width: 320, 
             height: 460, 
             decoration: BoxDecoration(
@@ -142,16 +152,27 @@ class _OverlayBubbleState extends State<OverlayBubble> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Screen Content", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: _closeWindow,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+                      Row(
+                        children: [
+                           // --- 4. NEW: SPEAKER ICON IN HEADER ---
+                          IconButton(
+                            icon: const Icon(Icons.volume_up, color: Colors.white),
+                            onPressed: () => _speak(fullTextToSpeak),
+                            tooltip: "Read Aloud",
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white),
+                            onPressed: _closeWindow,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                // Safe List (ListView.builder)
+                
+                // Safe List
                 Expanded(
                   child: _resultLines.isEmpty
                       ? const Center(child: Text("No text found on screen."))
@@ -174,6 +195,24 @@ class _OverlayBubbleState extends State<OverlayBubble> {
                           },
                         ),
                 ),
+                
+                // Optional: Bottom Speaker Button (Alternative Placement)
+                // If you prefer a big button at the bottom, uncomment this:
+                /*
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8.0),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.record_voice_over),
+                    label: const Text("Listen"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6A11CB),
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () => _speak(fullTextToSpeak),
+                  ),
+                ),
+                */
               ],
             ),
           ),
@@ -182,7 +221,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     }
 
     // -----------------------------------------------------------
-    // MODE 2: THE FLOATING BUBBLE (Small Icon)
+    // MODE 2: THE FLOATING BUBBLE
     // -----------------------------------------------------------
     return Material(
       color: Colors.transparent,
