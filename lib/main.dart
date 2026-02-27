@@ -1,11 +1,12 @@
 import 'dart:ui'; // Required for Port
 import 'dart:isolate'; // Required for Port
 import 'dart:async'; // Required for Timeout
+import 'package:digital_assistant/splash_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'overlay_bubble.dart';
-import 'dashboard_page.dart';
 import 'services/ocr_service.dart'; 
 import 'services/api_service.dart'; // <--- NEW: Import the Backend Bridge
 
@@ -21,10 +22,13 @@ void overlayMain() {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  
+  // ✅ CHECK: Has user seen onboarding?
+  final prefs = await SharedPreferences.getInstance();
+  final bool seen = prefs.getBool('seenOnboarding') ?? false;
 
-  // ✅ THE WORMHOLE FIX (Restored)
-  // This keeps the connection alive even if Vivo/Asus tries to sleep the app
+  runApp(MyApp(seenOnboarding: seen)); // Pass result to MyApp
+
   _setupPort();
 }
 
@@ -127,15 +131,27 @@ Future<void> _performHybridScan() async {
     await FlutterOverlayWindow.shareData("RESULT:Error: Could not scan screen.\n$e");
   }
 }
-
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool seenOnboarding; // Receive the value here
+  const MyApp({super.key, required this.seenOnboarding});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: const DashboardPage(), // ✅ Loads UI from separate file
+      // Load SplashScreen first, passing the boolean
+      home: SplashScreen(seenOnboarding: seenOnboarding), 
     );
   }
 }
+// class MyApp extends StatelessWidget {
+//   const MyApp({super.key});
+
+//   @override
+//   Widget build(BuildContext context) {
+//     return MaterialApp(
+//       debugShowCheckedModeBanner: false,
+//       home: const DashboardPage(), // ✅ Loads UI from separate file
+//     );
+//   }
+// }

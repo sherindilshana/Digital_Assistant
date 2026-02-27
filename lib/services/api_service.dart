@@ -4,11 +4,10 @@ import 'package:http/http.dart' as http;
 class ApiService {
   // ⚠️ CRITICAL: Replace this with your LAPTOP'S IP from 'ipconfig'
   // Do NOT use localhost. Use 192.168.x.x
-  static const String _baseUrl = "http://192.168.1.3:8000/api/translate/";
+  static const String _baseUrl = "http://127.0.0.1:8000/api/translate/";
   static Future<String> sendToBackend(String text) async {
     try {
       print("ApiService: Sending to $_baseUrl");
-
       final response = await http
           .post(
             Uri.parse(_baseUrl),
@@ -21,7 +20,6 @@ class ApiService {
               throw "Timeout: Laptop not reachable.";
             },
           );
-
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         // We return the Translated Text + The Source (Online/Offline)
