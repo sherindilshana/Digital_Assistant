@@ -56,3 +56,23 @@ class TranslationView(APIView):
             return Response({
                 "error": "Both online and offline translation failed."
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+class FormAssistView(APIView):
+    def post(self, request):
+        field_hint = request.data.get('field_hint', '')
+        
+        if not field_hint:
+            return Response({"error": "No field_hint provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        print(f"Form Field Detected: {field_hint}") 
+
+        # Get the action and Malayalam audio from Gemini
+        action_data = GeminiService.get_form_action(field_hint)
+        
+        # Return the JSON back to Flutter!
+        return Response(action_data, status=status.HTTP_200_OK)
+class UniversalScanView(APIView):
+    def post(self, request):
+        raw_text = request.data.get('raw_text', '')
+        # This calls the method you just perfected
+        extracted_map = GeminiService.extract_universal_id_data(raw_text)
+        return Response({"data_map": extracted_map}, status=status.HTTP_200_OK)

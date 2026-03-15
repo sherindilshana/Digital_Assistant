@@ -20,19 +20,24 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _runAutoSetup() async {
-    // STEP 1: Fix Battery Killing (Automatic Popup)
+    // STEP 1: Battery Optimizations
     var batteryStatus = await Permission.ignoreBatteryOptimizations.status;
     if (!batteryStatus.isGranted) {
        await Permission.ignoreBatteryOptimizations.request();
     }
 
-    // STEP 2: Fix Overlay Permission (Semi-Automatic)
+    // STEP 2: Overlay Permission
     bool overlayStatus = await FlutterOverlayWindow.isPermissionGranted();
     if (!overlayStatus) {
       await FlutterOverlayWindow.requestPermission();
     }
 
-    // STEP 3: Check Service Status
+    // NEW: Step 3: Request Camera & Mic here so the bubble has permission later
+    await [
+      Permission.camera,
+      Permission.microphone,
+    ].request();
+
     _checkServiceStatus();
   }
 
@@ -54,8 +59,8 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() => _isServiceActive = false);
     } else {
       await FlutterOverlayWindow.showOverlay(
-        height: 90,
-        width: 90,
+        height: 100,
+        width: 100,
         alignment: OverlayAlignment.centerRight,
         flag: OverlayFlag.defaultFlag,
         enableDrag: true,

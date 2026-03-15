@@ -18,18 +18,47 @@ class MainActivity: FlutterActivity() {
                 return@setMethodCallHandler
             }
 
+            // --- TRANSLATION & OCR FEATURES ---
             if (call.method == "getScreenText") {
-                // Feature 1: Get Text Code
                 val text = service.getScreenText()
                 result.success(text)
             } 
             else if (call.method == "takeScreenshot") {
-                // Feature 2: Take Screenshot
                 service.takeScreenshot { path ->
                     if (path != null) result.success(path)
                     else result.error("ERROR", "Screenshot failed", null)
                 }
             } 
+            // --- FORM ASSISTANCE FEATURES ---
+            else if (call.method == "getFormFields") {
+                val text = service.getFormFields()
+                result.success(text)
+            }
+            else if (call.method == "injectText") {
+                val textToInject = call.argument<String>("text") ?: ""
+                val success = service.injectText(textToInject)
+                if (success) {
+                    result.success("Injected Successfully")
+                } else {
+                    result.error("ERROR", "Could not inject text.", null)
+                }
+            }
+            // 🛡️ THE NEW AUTO-FILL ENGINE CONNECTION
+            else if (call.method == "autoFillAllFields") {
+                val dataMap = call.argument<Map<String, String>>("data_map") ?: emptyMap()
+                if (dataMap.isNotEmpty()) {
+                    service.autoFillAllFields(dataMap)
+                    result.success("Auto-fill engine triggered")
+                } else {
+                    result.error("EMPTY_DATA", "No data provided for auto-fill", null)
+                }
+            }
+            // 🛡️ NEW: THE AUTO-DETECTION CONNECTION
+            else if (call.method == "findNextEmptyField") {
+                val nextFieldHint = service.findNextEmptyField()
+                // This returns the hint of the first empty box it finds (e.g., "Mobile Number")
+                result.success(nextFieldHint)
+            }
             else {
                 result.notImplemented()
             }
