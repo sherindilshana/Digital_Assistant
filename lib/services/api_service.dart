@@ -28,7 +28,22 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         // We return the Translated Text + The Source (Online/Offline)
-        return "${data['translated']}\n\n(Source: ${data['source']})";
+        //return "${data['translated']}\n\n(Source: ${data['source']})";
+        String translated = data['translated'] ?? "";
+
+        // Remove bold markdown
+        translated = translated.replaceAll("**", "");
+
+        // Replace bullet stars with dash so structure remains
+        translated = translated.replaceAll(
+          RegExp(r'^\*\s?', multiLine: true),
+          "- ",
+        );
+
+        // Clean spaces
+        translated = translated.trim();
+
+        return translated;
       } else {
         return "Server Error: ${response.statusCode}";
       }

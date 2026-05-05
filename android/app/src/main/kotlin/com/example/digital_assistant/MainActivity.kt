@@ -28,6 +28,10 @@ class MainActivity: FlutterActivity() {
                     if (path != null) result.success(path)
                     else result.error("ERROR", "Screenshot failed", null)
                 }
+            }
+            else if (call.method == "getCurrentApp") {
+                val app = service.getCurrentApp()
+                result.success(app)
             } 
             // --- FORM ASSISTANCE FEATURES ---
             else if (call.method == "getFormFields") {

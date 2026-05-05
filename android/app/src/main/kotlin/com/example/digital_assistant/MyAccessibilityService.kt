@@ -33,6 +33,10 @@ class MyAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         instance = null
     }
+    fun getCurrentApp(): String? {
+        val rootNode = rootInActiveWindow ?: return null
+        return rootNode.packageName?.toString()
+    }
 
     // --- FEATURE 1: GET ALL SCREEN TEXT ---
     fun getScreenText(): String {
@@ -145,45 +149,124 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun fillNodesRecursively(node: AccessibilityNodeInfo, dataMap: Map<String, String>): Boolean {
         var anyFilled = false
-        if (node.isEditable && node.isVisibleToUser) {
+        // 🛡️ Ensure we are looking at a fresh tree
+        node.refresh()
+
+        if (node.isVisibleToUser) {
             val hint = (node.hintText?.toString() ?: "").lowercase()
             val contentDesc = (node.contentDescription?.toString() ?: "").lowercase()
-            val currentText = (node.text?.toString() ?: "").lowercase()
-            val identifier = "$hint $contentDesc $currentText".replace("required question", "").replace("*", "").trim()
+            val text = (node.text?.toString() ?: "").lowercase()
+            val identifier = "$hint $contentDesc $text".lowercase()
 
             for ((key, value) in dataMap) {
                 if (value.isEmpty() || value == "null") continue
+                val targetVal = value.lowercase()
                 
+                // 🛡️ UNIVERSAL MATCHING
                 val isMatch = when (key) {
-                    "full name" -> identifier.contains("name")
-                    "dob" -> identifier.contains("dob") || identifier.contains("birth")
-                    "gender" -> identifier.contains("gender") || identifier.contains("sex")
-                    "id number" -> identifier.contains("id") || identifier.contains("aadhaar") || identifier.contains("pan")
-                    else -> identifier.contains(key)
+                    // 🛡️ NAME: Prevents Account Number overwrite
+                    "full name" -> (identifier.contains("name") || identifier.contains("holder")) && 
+                                   !identifier.contains("number") && !identifier.contains("no")
+                    
+                    // 🛡️ ACCOUNT NUMBER: Strict digits check
+                    "account number" -> identifier.contains("account") && (identifier.contains("number") || identifier.contains("no")) && 
+                                        !identifier.contains("name") && !identifier.contains("holder")
+                    
+                    // 🛡️ GENDER & IDENTITY
+                    "gender" -> identifier.contains("gender") || identifier.contains("sex") || 
+                                identifier.contains("male") || identifier.contains("female")
+                    "id number" -> (identifier.contains("id") || identifier.contains("aadhaar") || identifier.contains("aadhar")) && !identifier.contains("mobile")
+                    "dob" -> identifier.contains("dob") || identifier.contains("birth") || identifier.contains("date")
+
+                    // 🛡️ BANK DETAILS
+                    "ifsc" -> identifier.contains("ifsc") || identifier.contains("code")
+                    "branch name" -> identifier.contains("branch") || identifier.contains("office")
+                    
+                    // 🛡️ ADDRESS SPLIT (REPLACED & COMPLETE)
+                    "pincode" -> identifier.contains("pincode") || identifier.contains("pin") || identifier.contains("zip")
+                    "full address" -> identifier.contains("address") && !identifier.contains("house") && !identifier.contains("street")
+                    "house name" -> identifier.contains("house") || identifier.contains("building") || identifier.contains("home")
+                    "street" -> identifier.contains("street") || identifier.contains("road") || identifier.contains("lane")
+                    "place" -> identifier.contains("place") || identifier.contains("city") || identifier.contains("town") || identifier.contains("location")
+                    "district" -> identifier.contains("district") || identifier.contains("dist")
+                    "state" -> identifier.contains("state")
+                    
+                    // 🛡️ UTILITIES
+                    "consumer number" -> identifier.contains("consumer") || identifier.contains("customer") || identifier.contains("con no")
+
+                    else -> identifier.contains(key.lowercase())
                 }
 
                 if (isMatch) {
-                    Log.d("Assistant", "🔥 INJECTING: $key -> $value")
-                    node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    
-                    // Small sleep to let the browser input connection open
-                    Thread.sleep(150) 
-                    
-                    val args = Bundle()
-                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-                    val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                    
-                    if (!success) { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) }
-                    anyFilled = true
-                    break
+                    // 🎯 STEP 1: If it's a box, type.
+                    if (node.isEditable) {
+                        injectToNode(node, value, key)
+                        anyFilled = true
+                    } 
+                    // 🎯 STEP 2: If it's a radio button (Gender), click.
+                    else if (identifier.contains(targetVal) && (node.isClickable || node.isCheckable)) {
+                        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        anyFilled = true
+                    }
+                    // 🎯 STEP 3: If it's just a label, find the box next to it.
+                    else {
+                        val inputNode = findNearestInput(node)
+                        if (inputNode != null) {
+                            injectToNode(inputNode, value, key)
+                            anyFilled = true
+                        }
+                    }
                 }
             }
         }
+
+        
         for (i in 0 until node.childCount) {
-            if (fillNodesRecursively(node.getChild(i) ?: continue, dataMap)) anyFilled = true
+            val child = node.getChild(i) ?: continue
+            if (fillNodesRecursively(child, dataMap)) anyFilled = true
         }
         return anyFilled
+    }
+    private fun injectToNode(node: AccessibilityNodeInfo, value: String, key: String) {
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+
+        // 🛡️ EMERGENCY FIX: Clear the field first so data doesn't mix
+        val clearArgs = Bundle()
+        clearArgs.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, clearArgs)
+
+        try { Thread.sleep(100) } catch (e: Exception) {}
+
+        val args = Bundle()
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+
+        var success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+        // 🔥 FALLBACK: Paste works where SetText is blocked
+        if (!success) {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("label", value))
+            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        }
+    }
+
+    private fun findNearestInput(startNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val parent = startNode.parent ?: return null
+        for (i in 0 until parent.childCount) {
+            val sibling = parent.getChild(i) ?: continue
+            if (sibling.isEditable) return sibling
+        }
+        val grandParent = parent.parent ?: return null
+        for (i in 0 until grandParent.childCount) {
+            val cousin = grandParent.getChild(i) ?: continue
+            if (cousin.isEditable) return cousin
+            for (j in 0 until cousin.childCount) {
+                val subCousin = cousin.getChild(j) ?: continue
+                if (subCousin.isEditable) return subCousin
+            }
+        }
+        return null
     }
     // --- FEATURE 5: SINGLE INJECTION FALLBACK ---
     fun injectText(textToInject: String): Boolean {

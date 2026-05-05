@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'overlay_bubble.dart';
 import 'services/ocr_service.dart';
 import 'services/api_service.dart'; // <--- NEW: Import the Backend Bridge
+import 'package:digital_assistant/services/source_reliability_service.dart';
 
 @pragma("vm:entry-point")
 void overlayMain() {
@@ -77,11 +78,12 @@ Future<void> _handleMainAppCamera() async {
 
       // 1. 🛡️ TRIGGER AUTO-FILL IMMEDIATELY
       await platform.invokeMethod('autoFillAllFields', {'data_map': idDetails});
+      await FlutterOverlayWindow.shareData("CAMERA_TEXT_READY:");
 
       // 2. 🛡️ THE "ANCHOR" DELAY
       // We must keep the app ALIVE for at least 1.5 seconds.
       // This ensures Android doesn't kill the focus while Kotlin is searching for the form.
-      await Future.delayed(const Duration(milliseconds: 1500));
+      await Future.delayed(const Duration(milliseconds: 4500));
 
       // 3. 🛡️ PERFORM THE SWEEP
       final String? nextEmpty = await platform.invokeMethod('findNextEmptyField');
@@ -90,11 +92,13 @@ Future<void> _handleMainAppCamera() async {
         // Change the bubble to Microphone BEFORE closing
         await FlutterOverlayWindow.shareData("PROCESS_NEXT_FIELD:$nextEmpty");
         // Tiny extra buffer to ensure message delivery
-        await Future.delayed(const Duration(milliseconds: 300));
-      } else {
+        await Future.delayed(const Duration(milliseconds: 600));
+      } 
+      else {
         await FlutterOverlayWindow.shareData("CAMERA_TEXT_READY:");
+        await Future.delayed(const Duration(milliseconds: 500));
       }
-
+      
       // 4. NOW CLOSE
       SystemNavigator.pop();
 
@@ -183,6 +187,13 @@ Future<void> _performHybridScan() async {
 
     // --- STEP 3: SEND TO BACKEND & TRANSLATE (NEW LOGIC) ---
     String rawEnglish = scannedTextBuffer.toString();
+    String currentApp = await platform.invokeMethod('getCurrentApp');
+    // SOURCE RELIABILITY CHECK
+    String reliabilityResult = await SourceReliabilityService.checkSource(
+      rawEnglish,
+      currentApp,
+      
+    );
 
     // Check if we actually found any text
     if (rawEnglish.trim().isEmpty) {
@@ -200,6 +211,8 @@ Future<void> _performHybridScan() async {
 
     // CALL THE API (Sends text to Laptop -> Gemini/Offline -> Back)
     String translatedResult = await ApiService.sendToBackend(rawEnglish);
+    translatedResult =
+    "$reliabilityResult\n\n$translatedResult";
 
     print("Main App: Translation received.");
 

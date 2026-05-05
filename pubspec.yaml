@@ -43,6 +43,7 @@ dependencies:
   liquid_swipe: ^3.1.0
   shared_preferences: ^2.5.4
   speech_to_text: ^7.3.0
+  android_intent_plus: ^6.0.0
   
 
 dev_dependencies:
@@ -73,6 +74,9 @@ flutter:
       - assets/images/onboarding/robot_bridge.png
       - assets/images/onboarding/robot_listen.png
       - assets/images/onboarding/robot_translate.png
+      - assets/setup/accessibility_permission.jpeg
+      - assets/setup/overlay_permission.jpeg
+      - assets/setup/accessibility_popup.jpeg
 
 
   # An image asset can refer to one or more resolution-specific "variants", see

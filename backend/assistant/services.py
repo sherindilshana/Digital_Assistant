@@ -1,11 +1,35 @@
 import google.generativeai as genai
 from django.conf import settings
 import json 
-
+import requests
+import re
+SAFE_BROWSING_API_KEY ="AIzaSyCWjlHWvWd8n69yNnq0zbG1REyYT6FedsE"
+def extract_urls(text):
+    pattern = r'(https?://[^\s]+)'
+    return re.findall(pattern, text)
+def check_url_safety(url):
+    endpoint = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={SAFE_BROWSING_API_KEY}"
+    body = {
+        "client": {
+            "clientId": "orukoottu",
+            "clientVersion": "1.0"
+        },
+        "threatInfo": {
+            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}]
+        }
+    }
+    response = requests.post(endpoint, json=body)    
+    result = response.json()
+    if "matches" in result:
+        return "⚠️ Unsafe website detected"
+    else:
+        return "✅ Safe source" 
 # Configure using the key from settings.py
 #genai.configure(api_key=settings.GEMINI_API_KEY)
-NEW_KEY = "AIzaSyA9X28iZGqQ9css5VQM3GaZmwlb6AMxBTw"
-
+NEW_KEY = "AIzaSyCR6psw3SapqdMH9viyr9ZbCtq7YKedQY8"
 genai.configure(api_key=NEW_KEY)
 
 class GeminiService:
@@ -86,23 +110,32 @@ class GeminiService:
             TASK:
             Extract every detail into a JSON dictionary using these EXACT keys:
             "full name", "dob", "gender", "id number", "ifsc", "account number", "consumer number",
-            "full address", "house name", "street", "place", "district", "state", "pincode".
+            "branch name", "full address", "house name", "street", "place", "district", "state", "pincode".
 
             RULES:
             1. NAME: Extract the person's full name exactly. Remove titles like "Mr." or "Smt.".
             2. BANK & UTILITY: For "account number", "consumer number", and "id number", extract ONLY digits.
             3. IFSC: Extract exactly the 11-character alphanumeric code.
-            4. ADDRESS (FULL): The complete address exactly as it appears.
-            5. ADDRESS (SPLIT): Break it down into "house name", "street", "place", "district", "state".
-            6. PINCODE: Extract ONLY the 6-digit number.
-            7. CLEANING: Fix OCR errors (e.g., 'O' to '0' or 'I' to '1' in numbers and pincodes).
-            8. EMPTY FIELDS: If a piece of info is not found, use an empty string "".
-            9. RESPONSE: Respond ONLY with the JSON dictionary. No extra text.
+            4. BRANCH: Explicitly lookfor the name of the bank branch location.
+            5. ADDRESS (FULL): The complete address exactly as it appears.
+            6. ADDRESS (SPLIT): Break it down into "house name", "street", "place", "district", "state".
+            7. PINCODE: Extract ONLY the 6-digit number.
+            8. CLEANING: Fix OCR errors (e.g., 'O' to '0' or 'I' to '1' in numbers and pincodes).
+            9. EMPTY FIELDS: If a piece of info is not found, use an empty string "".
+            10. RESPONSE: Respond ONLY with the JSON dictionary. No extra text.
             """
             response = model.generate_content(prompt)
             # Remove possible markdown formatting
             clean_json = response.text.strip().replace('```json', '').replace('```', '')
-            return json.loads(clean_json)
+            data = json.loads(clean_json)
+
+            # 🛡️ THE DEBUG PRINT: Look at your Django terminal for this!
+            print("\n" + "="*50)
+            print("🔍 GEMINI DATA EXTRACTION RESULT:")
+            print(json.dumps(data, indent=4))
+            print("="*50 + "\n")
+
+            return data
         except Exception as e:
             print(f"Gemini Master Extraction Error: {e}")
             return {}

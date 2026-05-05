@@ -31,7 +31,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     super.initState();
     _subscription = FlutterOverlayWindow.overlayListener.listen((data) async {
       if (data is String) {
-        // 1. Existing Translation Listener
+        // 1. Existing Translation Listener (UNCHANGED)
         if (data.startsWith("RESULT:")) {
           _safetyTimer?.cancel();
           final rawText = data.replaceFirst("RESULT:", "");
@@ -46,12 +46,12 @@ class _OverlayBubbleState extends State<OverlayBubble> {
             });
           }
         }
-        // 2. Form Field Success Listener
+        // 2. Form Field Success Listener (UNCHANGED)
         else if (data.startsWith("FORM_FIELDS_RESULT:")) {
           String formFieldsText = data.replaceFirst("FORM_FIELDS_RESULT:", "");
           _processFormFields(formFieldsText);
         }
-        // 3. MULTI-FIELD AUTO-FILL SUCCESS LISTENER
+        // 3. MULTI-FIELD AUTO-FILL SUCCESS LISTENER (UNCHANGED)
         else if (data.startsWith("CAMERA_TEXT_READY:")) {
           setState(() {
             _bubbleState = 'PASTE';
@@ -59,15 +59,19 @@ class _OverlayBubbleState extends State<OverlayBubble> {
           });
           _speak("വിവരങ്ങൾ തനിയെ പൂരിപ്പിച്ചു കഴിഞ്ഞു. പരിശോധിക്കുക.");
         }
-        // 🛡️ NEW: THE SMART JUMP LISTENER (ADD THIS HERE)
+        // 🛡️ MODIFICATION: SMART JUMP LISTENER
+        // This ensures the bubble turns into a Microphone automatically after the scan
         else if (data.startsWith("PROCESS_NEXT_FIELD:")) {
           String nextHint = data.replaceFirst("PROCESS_NEXT_FIELD:", "");
-          
-          // This automatically triggers the backend to see if the next field
-          // needs a Microphone or a Camera and updates the bubble icon.
-          _processFormFields(nextHint); 
+          // Clear any stuck loading state from the previous scan
+          setState(() {
+            _isLoading = false; // 🛡️ Kill the spinner!
+            _bubbleState = 'IDLE'; // Reset state so the next icon can load
+          });
+          _speak("ബാക്കി വിവരങ്ങൾ തനിയെ പൂരിപ്പിക്കുക അല്ലെങ്കിൽ എന്നോട് പറയുക.");
+          _processFormFields(nextHint);
         }
-        // 4. Form Field Error Listener
+        // 4. Form Field Error Listener (UNCHANGED)
         else if (data.startsWith("FORM_FIELDS_ERROR:")) {
           _speak("ക്ഷമിക്കണം, ഒരു തകരാറുണ്ടായി.");
           setState(() {
@@ -75,6 +79,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
             _isLoading = false;
           });
         }
+        
       }
     });
   }
@@ -111,15 +116,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   // =======================================================
 
   Future<void> _handleSmartTap() async {
-    // 🛡️ MODIFIED: The PASTE icon now acts as a verification/undo button
-    if (_bubbleState == 'PASTE') {
-      _speak("എല്ലാം ശരിയാണോ? എന്തെങ്കിലും മാറ്റം വരുത്തണമെങ്കിൽ വീണ്ടും സ്കാൻ ചെയ്യാം.");
-      setState(() {
-        _bubbleState = 'IDLE'; 
-        _isLoading = false;
-      });
-      return;
-    }
+    setState(() {
+      _isLoading = false;
+    });
 
     if (_bubbleState == 'VOICE') {
       _startVoiceInput();
@@ -127,11 +126,20 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     } else if (_bubbleState == 'CAMERA') {
       _startCameraScan();
       return;
+    } else if (_bubbleState == 'PASTE') {
+      _speak("വിവരങ്ങൾ പരിശോധിക്കുക.");
+      setState(() {
+        _bubbleState = 'IDLE';
+        _isLoading = false;
+      });
+      return;
     }
 
+    // Normal IDLE tap
     setState(() => _isLoading = true);
-    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
-
+    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
+      'ASSISTANT_PORT',
+    );
     if (mainAppPort != null) {
       mainAppPort.send("GetFormFields");
     } else {
@@ -143,7 +151,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   Future<void> _processFormFields(String formFieldsText) async {
     try {
       if (formFieldsText.isEmpty || !formFieldsText.contains('[FIELD]')) {
-        final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+        final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
+          'ASSISTANT_PORT',
+        );
         mainAppPort?.send("StartScan");
         return;
       }
@@ -155,7 +165,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
 
       setState(() {
         _bubbleState = actionData['action'] ?? 'IDLE';
-        _isLoading = false;
+        _isLoading = false; // 🛡️ Fixes stuck spinner on 2nd field
       });
     } catch (e) {
       _speak("ക്ഷമിക്കണം, ഒരു തകരാറുണ്ടായി.");
@@ -167,13 +177,18 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     if (!_isListening) {
       bool available = await _speech.initialize();
       if (available) {
-        setState(() => _isListening = true);
+        setState(() {
+          _isListening = true;
+          _isLoading = false; // 🛡️ Ensure spinner is gone when mic starts
+        });
         _speech.listen(
           localeId: 'ml_IN',
           onResult: (val) async {
             if (val.hasConfidenceRating && val.confidence > 0) {
               setState(() => _isListening = false);
-              final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+              final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
+                'ASSISTANT_PORT',
+              );
               mainAppPort?.send("InjectText:${val.recognizedWords}");
               setState(() => _bubbleState = 'IDLE');
               _speak("വിവരങ്ങൾ നൽകി");
@@ -186,7 +201,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
 
   Future<void> _startCameraScan() async {
     _speak("ക്യാമറ തുറക്കുന്നു. രേഖകൾ കാണിക്കുക.");
-    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
+      'ASSISTANT_PORT',
+    );
     if (mainAppPort != null) {
       mainAppPort.send("OPENCAMERA");
       setState(() {
@@ -196,6 +213,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     }
   }
 
+  // --- UI RENDER (EXACTLY AS YOU HAD IT) ---
   @override
   Widget build(BuildContext context) {
     if (_isWindowMode) {
@@ -210,7 +228,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
               color: Colors.white,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: const Color(0xFF6A11CB), width: 3),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
+              boxShadow: const [
+                BoxShadow(color: Colors.black26, blurRadius: 10),
+              ],
             ),
             child: Column(
               children: [
@@ -219,16 +239,36 @@ class _OverlayBubbleState extends State<OverlayBubble> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: const BoxDecoration(
                     color: Color(0xFF6A11CB),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(13)),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(13),
+                    ),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("Screen Content", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Text(
+                        "Screen Content",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                       Row(
                         children: [
-                          IconButton(icon: const Icon(Icons.volume_up, color: Colors.white), onPressed: () => _speak(fullTextToSpeak)),
-                          IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: _closeWindow, padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+                          IconButton(
+                            icon: const Icon(
+                              Icons.volume_up,
+                              color: Colors.white,
+                            ),
+                            onPressed: () => _speak(fullTextToSpeak),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white),
+                            onPressed: _closeWindow,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
                         ],
                       ),
                     ],
@@ -238,10 +278,14 @@ class _OverlayBubbleState extends State<OverlayBubble> {
                   child: ListView.builder(
                     padding: const EdgeInsets.all(12),
                     itemCount: _resultLines.length,
-                    itemBuilder: (context, index) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(_resultLines[index], style: const TextStyle(fontSize: 14)),
-                    ),
+                    itemBuilder:
+                        (context, index) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            _resultLines[index],
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ),
                   ),
                 ),
               ],
@@ -256,19 +300,28 @@ class _OverlayBubbleState extends State<OverlayBubble> {
       child: Center(
         child: GestureDetector(
           onTap: _handleSmartTap,
-          child: _isLoading
-              ? const CircularProgressIndicator(color: Color(0xFF6A11CB))
-              : Container(
-                  height: 90,
-                  width: 90,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _bubbleState == 'IDLE' ? Colors.white : Colors.orangeAccent,
-                    border: Border.all(color: const Color(0xFF6A11CB), width: 2),
-                    boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 8)],
+          child:
+              _isLoading
+                  ? const CircularProgressIndicator(color: Color(0xFF6A11CB))
+                  : Container(
+                    height: 90,
+                    width: 90,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color:
+                          _bubbleState == 'IDLE'
+                              ? Colors.white
+                              : Colors.orangeAccent,
+                      border: Border.all(
+                        color: const Color(0xFF6A11CB),
+                        width: 2,
+                      ),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black45, blurRadius: 8),
+                      ],
+                    ),
+                    child: _buildDynamicIcon(),
                   ),
-                  child: _buildDynamicIcon(),
-                ),
         ),
       ),
     );
@@ -276,12 +329,32 @@ class _OverlayBubbleState extends State<OverlayBubble> {
 
   Widget _buildDynamicIcon() {
     switch (_bubbleState) {
-      case 'VOICE': return Icon(_isListening ? Icons.mic : Icons.mic_none, color: Colors.white, size: 35);
-      case 'CAMERA': return const Icon(Icons.camera_alt, color: Colors.white, size: 35);
-      case 'AUTO_WAIT': return const Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator(color: Colors.white));
-      case 'GUIDE_KEYBOARD': return const Icon(Icons.lock, color: Colors.white, size: 35);
-      case 'PASTE': return const Icon(Icons.assignment_turned_in, color: Colors.white, size: 35);
-      default: return Padding(padding: const EdgeInsets.all(12.0), child: Image.asset('assets/images/logo.png'));
+      case 'VOICE':
+        return Icon(
+          _isListening ? Icons.mic : Icons.mic_none,
+          color: Colors.white,
+          size: 35,
+        );
+      case 'CAMERA':
+        return const Icon(Icons.camera_alt, color: Colors.white, size: 35);
+      case 'AUTO_WAIT':
+        return const Padding(
+          padding: EdgeInsets.all(16.0),
+          child: CircularProgressIndicator(color: Colors.white),
+        );
+      case 'GUIDE_KEYBOARD':
+        return const Icon(Icons.lock, color: Colors.white, size: 35);
+      case 'PASTE':
+        return const Icon(
+          Icons.assignment_turned_in,
+          color: Colors.white,
+          size: 35,
+        );
+      default:
+        return Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Image.asset('assets/images/logo.png'),
+        );
     }
   }
 }

@@ -1,4 +1,5 @@
 import 'package:digital_assistant/dashboard_page.dart';
+import 'package:digital_assistant/setup/setup_guide.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_swipe/liquid_swipe.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -90,7 +91,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   if (context.mounted) {
                     Navigator.pushReplacement(
                       context,
-                      MaterialPageRoute(builder: (_) => const DashboardPage()),
+                      MaterialPageRoute(builder: (_) => const SetupGuide()),
                     );
                   }
                 },
