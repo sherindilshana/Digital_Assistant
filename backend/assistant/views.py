@@ -76,3 +76,9 @@ class UniversalScanView(APIView):
         # This calls the method you just perfected
         extracted_map = GeminiService.extract_universal_id_data(raw_text)
         return Response({"data_map": extracted_map}, status=status.HTTP_200_OK)
+
+class VoiceFormatView(APIView):
+    def post(self, request):
+        raw_audio = request.data.get('raw_audio', '')
+        formatted_text = GeminiService.format_voice_input(raw_audio)
+        return Response({"formatted_text": formatted_text}, status=status.HTTP_200_OK)

@@ -46,16 +46,28 @@ void _setupPort() {
     if (message == "StartScan") {
       await _performHybridScan(); // Your existing Translation
     }
-    // --- NEW: Handle Form Assistant Commands ---
+    // Smart navigation: find next EMPTY field (skips already-filled ones)
+    else if (message == "FindNextField") {
+      await _findAndProcessNextField();
+    }
+    // Fallback: get fields by focus context
     else if (message == "GetFormFields") {
       await _getFormFieldsFromNative();
     }
-    // --- NEW: HANDLE CAMERA FROM MAIN APP ---
+    // --- HANDLE CAMERA FROM MAIN APP ---
     else if (message == "OPENCAMERA") {
       await _handleMainAppCamera();
     } else if (message.toString().startsWith("InjectText:")) {
       String textToInject = message.toString().substring(11);
       await _injectTextToNative(textToInject);
+    }
+    // --- EMAIL_POPUP: Ask Kotlin to show the native account picker ---
+    else if (message == "TRIGGER_EMAIL_POPUP") {
+      await _triggerEmailPopup();
+    }
+    // --- AUTO_WAIT: Tell Kotlin to listen for SMS OTP ---
+    else if (message == "START_OTP_WATCH") {
+      await _startOtpWatch();
     }
   });
 }
@@ -99,16 +111,40 @@ Future<void> _handleMainAppCamera() async {
         await Future.delayed(const Duration(milliseconds: 500));
       }
       
-      // 4. NOW CLOSE
-      SystemNavigator.pop();
+      // 4. 🛡️ CRITICAL FIX: Push to background INSTEAD of closing.
+      // SystemNavigator.pop() kills the isolate port — use moveTaskToBack instead.
+      await platform.invokeMethod('moveTaskToBack');
 
     } catch (e) {
-      SystemNavigator.pop();
+      try {
+        const platform2 = MethodChannel('com.example.digital_assistant/accessibility');
+        await platform2.invokeMethod('moveTaskToBack');
+      } catch (_) {}
     }
   }
 }
 
-// --- NEW HELPER: Asks Kotlin for the fields and sends it back to the bubble ---
+// --- SMART HELPER: Finds next EMPTY field, skips already-filled ones ---
+Future<void> _findAndProcessNextField() async {
+  const platform = MethodChannel('com.example.digital_assistant/accessibility');
+  try {
+    // 🛡️ ALWAYS ask for the next EMPTY field first.
+    // This skips already-filled fields like Aadhaar, Name, DOB.
+    final String? nextEmpty = await platform.invokeMethod('findNextEmptyField');
+
+    if (nextEmpty != null && nextEmpty.isNotEmpty) {
+      // Found an empty field — send it to the bubble to decide CAMERA/VOICE/etc.
+      await FlutterOverlayWindow.shareData("FORM_FIELDS_RESULT:$nextEmpty");
+    } else {
+      // All fields are filled! Tell the user the form is complete.
+      await FlutterOverlayWindow.shareData("FORM_COMPLETE:");
+    }
+  } catch (e) {
+    await FlutterOverlayWindow.shareData("FORM_FIELDS_ERROR:$e");
+  }
+}
+
+// --- FALLBACK HELPER: Gets fields by focus context ---
 Future<void> _getFormFieldsFromNative() async {
   const platform = MethodChannel('com.example.digital_assistant/accessibility');
   try {
@@ -119,11 +155,57 @@ Future<void> _getFormFieldsFromNative() async {
   }
 }
 
-// --- NEW HELPER: Asks Kotlin to type the text ---
+// --- EMAIL POPUP: Triggers native Android account picker ---
+Future<void> _triggerEmailPopup() async {
+  const platform = MethodChannel('com.example.digital_assistant/accessibility');
+  try {
+    final String? email = await platform.invokeMethod('showEmailPicker');
+    if (email != null && email.isNotEmpty) {
+      // 🛡️ CRITICAL FIX: Push Flutter app to background so Form Page becomes active
+      await platform.invokeMethod('moveTaskToBack');
+      
+      // Wait for the OS to switch apps and render the form page
+      await Future.delayed(const Duration(milliseconds: 1000));
+      
+      // Inject the selected email
+      await platform.invokeMethod('injectText', {'text': email});
+      
+      // Wait for text to settle, then jump to the next empty field
+      await Future.delayed(const Duration(milliseconds: 900));
+      await _findAndProcessNextField();
+    } else {
+      // If user cancelled, just go back to form
+      await platform.invokeMethod('moveTaskToBack');
+      await FlutterOverlayWindow.shareData("FORM_FIELDS_RESULT:[FIELD]: next field");
+    }
+  } catch (e) {
+    print("Email Popup Error: $e");
+    try { await platform.invokeMethod('moveTaskToBack'); } catch (_) {}
+    await FlutterOverlayWindow.shareData("FORM_FIELDS_RESULT:[FIELD]: next field");
+  }
+}
+
+// --- OTP WATCH: Kotlin listens for SMS for auto-fill ---
+Future<void> _startOtpWatch() async {
+  const platform = MethodChannel('com.example.digital_assistant/accessibility');
+  try {
+    // Kotlin side will handle the notification listener
+    // and call injectText automatically when OTP arrives
+    await platform.invokeMethod('startOtpWatch');
+  } catch (e) {
+    print("OTP Watch Error: $e");
+  }
+}
+
+// --- HELPER: Asks Kotlin to type the text, then auto-advance to next empty field ---
 Future<void> _injectTextToNative(String text) async {
   const platform = MethodChannel('com.example.digital_assistant/accessibility');
   try {
     await platform.invokeMethod('injectText', {'text': text});
+    // 🛡️ AUTO-ADVANCE: After injecting voice text, wait briefly for the form
+    // to register the value, then automatically move to the next empty field.
+    await Future.delayed(const Duration(milliseconds: 900));
+    await _findAndProcessNextField();
   } catch (e) {
     print("Main App: Inject Error: $e");
   }

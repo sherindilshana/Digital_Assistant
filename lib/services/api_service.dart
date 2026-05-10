@@ -104,4 +104,22 @@ class ApiService {
     }
     return {};
   }
+
+  // --- NEW: FORMAT VOICE INPUT ---
+  static Future<String> formatVoiceInput(String rawAudio) async {
+    try {
+      final response = await http.post(
+        Uri.parse("http://127.0.0.1:8000/api/format-voice/"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"raw_audio": rawAudio}),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body)['formatted_text'];
+      }
+    } catch (e) {
+      print('Network Error Format Voice: $e');
+    }
+    return rawAudio; // Fallback to raw if it fails
+  }
 }

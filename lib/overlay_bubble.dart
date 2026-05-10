@@ -31,6 +31,8 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     super.initState();
     _subscription = FlutterOverlayWindow.overlayListener.listen((data) async {
       if (data is String) {
+        // 🛡️ CRITICAL: Always reset loading as soon as ANY message arrives
+        if (mounted) setState(() => _isLoading = false);
         // 1. Existing Translation Listener (UNCHANGED)
         if (data.startsWith("RESULT:")) {
           _safetyTimer?.cancel();
@@ -46,32 +48,45 @@ class _OverlayBubbleState extends State<OverlayBubble> {
             });
           }
         }
-        // 2. Form Field Success Listener (UNCHANGED)
+        // 2. Form Field Success Listener
         else if (data.startsWith("FORM_FIELDS_RESULT:")) {
+          // 🛡️ Cancel the safety timer - response arrived, system is working fine
+          _safetyTimer?.cancel();
           String formFieldsText = data.replaceFirst("FORM_FIELDS_RESULT:", "");
           _processFormFields(formFieldsText);
         }
-        // 3. MULTI-FIELD AUTO-FILL SUCCESS LISTENER (UNCHANGED)
+        // 3. MULTI-FIELD AUTO-FILL SUCCESS LISTENER
         else if (data.startsWith("CAMERA_TEXT_READY:")) {
+          setState(() => _bubbleState = 'PASTE');
+          _speak("വിവരങ്ങൾ തനിയെ പൂരിച്ചു. ഒന്ന് പരിശോധിക്കൂ.");
+        }
+        // 🛡️ SMART JUMP LISTENER: auto-move to next field after camera scan
+        else if (data.startsWith("PROCESS_NEXT_FIELD:")) {
+          _safetyTimer?.cancel(); // Cancel timer - operation succeeded
+          String nextHint = data.replaceFirst("PROCESS_NEXT_FIELD:", "");
           setState(() {
-            _bubbleState = 'PASTE';
+            _bubbleState = 'IDLE';
             _isLoading = false;
           });
-          _speak("വിവരങ്ങൾ തനിയെ പൂരിപ്പിച്ചു കഴിഞ്ഞു. പരിശോധിക്കുക.");
-        }
-        // 🛡️ MODIFICATION: SMART JUMP LISTENER
-        // This ensures the bubble turns into a Microphone automatically after the scan
-        else if (data.startsWith("PROCESS_NEXT_FIELD:")) {
-          String nextHint = data.replaceFirst("PROCESS_NEXT_FIELD:", "");
-          // Clear any stuck loading state from the previous scan
-          setState(() {
-            _isLoading = false; // 🛡️ Kill the spinner!
-            _bubbleState = 'IDLE'; // Reset state so the next icon can load
-          });
-          _speak("ബാക്കി വിവരങ്ങൾ തനിയെ പൂരിപ്പിക്കുക അല്ലെങ്കിൽ എന്നോട് പറയുക.");
           _processFormFields(nextHint);
         }
-        // 4. Form Field Error Listener (UNCHANGED)
+        // 4. OTP auto-filled by Kotlin notification listener
+        else if (data.startsWith("OTP_FILLED:")) {
+          _speak("OTP സ്വയം പൂരിപ്പിച്ചു.");
+          setState(() {
+            _bubbleState = 'IDLE';
+            _isLoading = false;
+          });
+        }
+        // 5. Email was picked from OS picker
+        else if (data.startsWith("EMAIL_FILLED:")) {
+          _speak("ഇമെയിൽ ചേർത്തു.");
+          setState(() {
+            _bubbleState = 'IDLE';
+            _isLoading = false;
+          });
+        }
+        // 6. Form Field Error Listener
         else if (data.startsWith("FORM_FIELDS_ERROR:")) {
           _speak("ക്ഷമിക്കണം, ഒരു തകരാറുണ്ടായി.");
           setState(() {
@@ -79,7 +94,14 @@ class _OverlayBubbleState extends State<OverlayBubble> {
             _isLoading = false;
           });
         }
-        
+        // 7. Form Complete — all fields are filled!
+        else if (data.startsWith("FORM_COMPLETE:")) {
+          _speak("ഫോമിൽ കാണുന്ന വിവരങ്ങൾ പൂർണ്ണമായി. താഴേക്ക് നീക്കാൻ ഉണ്ടെങ്കിൽ, നീക്കിയ ശേഷം വീണ്ടും ബട്ടൺ അമർത്തുക.");
+          setState(() {
+            _bubbleState = 'IDLE';
+            _isLoading = false;
+          });
+        }
       }
     });
   }
@@ -116,10 +138,7 @@ class _OverlayBubbleState extends State<OverlayBubble> {
   // =======================================================
 
   Future<void> _handleSmartTap() async {
-    setState(() {
-      _isLoading = false;
-    });
-
+    // Non-IDLE states handle their own tap action first — never show spinner for these
     if (_bubbleState == 'VOICE') {
       _startVoiceInput();
       return;
@@ -127,7 +146,29 @@ class _OverlayBubbleState extends State<OverlayBubble> {
       _startCameraScan();
       return;
     } else if (_bubbleState == 'PASTE') {
-      _speak("വിവരങ്ങൾ പരിശോധിക്കുക.");
+      _speak("വിവരങ്ങൾ ശരിയായോ എന്ന് പരിശോധിക്കുക.");
+      setState(() {
+        _bubbleState = 'IDLE';
+        _isLoading = false;
+      });
+      return;
+    } else if (_bubbleState == 'EMAIL_POPUP') {
+      // Tell main app to open the OS native account picker
+      _speak("ഇമെയിൽ അക്കൗണ്ട് തിരഞ്ഞെടുക്കൂ.");
+      final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+      mainAppPort?.send("TRIGGER_EMAIL_POPUP");
+      setState(() {
+        _bubbleState = 'IDLE';
+        _isLoading = false;
+      });
+      return;
+    } else if (_bubbleState == 'AUTO_WAIT') {
+      // OTP mode: already waiting, just remind the user
+      _speak("OTP വരുന്നത് കാത്തിരിക്കുന്നു. ഞാൻ തനിയെ പൂരിപ്പിക്കാം.");
+      return;
+    } else if (_bubbleState == 'GUIDE_KEYBOARD') {
+      // Password mode: guide the user, do NOT auto-fill for security
+      _speak("ഇവിടെ നിങ്ങളുടെ രഹസ്യ പാസ്‌വേഡ് ആണ് വേണ്ടത്. ഫോണിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് ഉപയോഗിക്കുക, ഓർമ്മയുണ്ടെങ്കിൽ ടൈപ്പ് ചെയ്യുക.");
       setState(() {
         _bubbleState = 'IDLE';
         _isLoading = false;
@@ -135,67 +176,153 @@ class _OverlayBubbleState extends State<OverlayBubble> {
       return;
     }
 
-    // Normal IDLE tap
+    // IDLE tap — ask for form fields (or translation if not on a form)
     setState(() => _isLoading = true);
-    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
-      'ASSISTANT_PORT',
-    );
+    _safetyTimer?.cancel();
+    // Silent safety net: only resets spinner if truly stuck
+    _safetyTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted) setState(() => _isLoading = false);
+    });
+    final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
     if (mainAppPort != null) {
       mainAppPort.send("GetFormFields");
     } else {
-      _speak("ആപ്പ് തുറക്കുക");
+      _safetyTimer?.cancel();
+      _speak("ആപ്പ് ഒന്ന് തുറക്കൂ.");
       setState(() => _isLoading = false);
     }
   }
 
   Future<void> _processFormFields(String formFieldsText) async {
     try {
-      if (formFieldsText.isEmpty || !formFieldsText.contains('[FIELD]')) {
-        final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
-          'ASSISTANT_PORT',
-        );
+      // Ensure spinner is off before calling backend
+      if (mounted) setState(() => _isLoading = false);
+      if (formFieldsText.isEmpty ||
+          (!formFieldsText.contains('[FIELD]') && !formFieldsText.contains('[PASSWORD]'))) {
+        // Fallback: If no field is focused, do a normal screen scan
+        final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
         mainAppPort?.send("StartScan");
         return;
       }
 
       final String currentField = formFieldsText.split('\n').first;
+
+      // 🛡️ PASSWORD SHORTCUT: Go directly to GUIDE_KEYBOARD — no backend call needed
+      if (currentField.startsWith('[PASSWORD]')) {
+        _speak(
+          "ഇവിടെ നിങ്ങളുടെ രഹസ്യ പാസ്\u200cവേഡ് ആണ് വേണ്ടത്. "
+          "ഫോണിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് ഉപയോഗിക്കുക, "
+          "ഓർമ്മയുണ്ടെങ്കിൽ ടൈപ്പ് ചെയ്യുക.",
+        );
+        if (mounted) {
+          setState(() {
+            _bubbleState = 'GUIDE_KEYBOARD';
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
+      // Call backend to decide: CAMERA, VOICE, EMAIL_POPUP, etc.
       final actionData = await ApiService.getFormAction(currentField);
+      _speak(actionData['malayalam_audio'] ?? "വിവരങ്ങൾ നൽകുക");
 
-      await _speak(actionData['malayalam_audio'] ?? "ദയവായി വിവരങ്ങൾ നൽകുക");
+      final String action = actionData['action'] ?? 'IDLE';
 
-      setState(() {
-        _bubbleState = actionData['action'] ?? 'IDLE';
-        _isLoading = false; // 🛡️ Fixes stuck spinner on 2nd field
-      });
+      // 🛡️ OTP: immediately start watching for SMS on Kotlin side
+      if (action == 'AUTO_WAIT') {
+        final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+        mainAppPort?.send("START_OTP_WATCH");
+      }
+
+      if (mounted) {
+        setState(() {
+          _bubbleState = action;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      _speak("ക്ഷമിക്കണം, ഒരു തകരാറുണ്ടായി.");
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
+      _speak("ക്ഷമിക്കണം, തകരാറുണ്ടായി.");
+
     }
   }
 
   Future<void> _startVoiceInput() async {
-    if (!_isListening) {
-      bool available = await _speech.initialize();
-      if (available) {
-        setState(() {
-          _isListening = true;
-          _isLoading = false; // 🛡️ Ensure spinner is gone when mic starts
-        });
-        _speech.listen(
-          localeId: 'ml_IN',
-          onResult: (val) async {
-            if (val.hasConfidenceRating && val.confidence > 0) {
-              setState(() => _isListening = false);
-              final SendPort? mainAppPort = IsolateNameServer.lookupPortByName(
-                'ASSISTANT_PORT',
-              );
-              mainAppPort?.send("InjectText:${val.recognizedWords}");
-              setState(() => _bubbleState = 'IDLE');
-              _speak("വിവരങ്ങൾ നൽകി");
-            }
-          },
-        );
-      }
+    // 🛡️ FIX: If mic is already listening and user taps again → STOP and reset
+    if (_isListening) {
+      await _speech.stop();
+      setState(() {
+        _isListening = false;
+        _bubbleState = 'IDLE';
+      });
+      _speak("ശ്രവണം നിർത്തി.");
+      return;
+    }
+
+    bool available = await _speech.initialize(
+      onError: (error) {
+        // Auto-reset on any speech error
+        if (mounted) {
+          setState(() {
+            _isListening = false;
+            _bubbleState = 'IDLE';
+          });
+        }
+      },
+    );
+
+    if (available) {
+      setState(() {
+        _isListening = true;
+        _isLoading = false;
+      });
+
+      // Auto-timeout: silently resets mic if no speech within 15 seconds
+      _safetyTimer?.cancel();
+      _safetyTimer = Timer(const Duration(seconds: 15), () {
+        if (_isListening) {
+          _speech.stop();
+          if (mounted) {
+            setState(() {
+              _isListening = false;
+              _bubbleState = 'IDLE';
+            });
+          }
+          // Silent reset — no TTS so we don't interrupt the user
+        }
+      });
+
+      _speech.listen(
+        localeId: 'ml_IN',
+        onResult: (val) async {
+          // Accept any words, not just high-confidence results
+          if (val.recognizedWords.isNotEmpty && val.finalResult) {
+            _safetyTimer?.cancel();
+            await _speech.stop();
+            setState(() {
+              _isListening = false;
+              _isLoading = true; // Show spinner while formatting
+            });
+            
+            // Format Malayalam audio into English text via backend
+            String formattedText = await ApiService.formatVoiceInput(val.recognizedWords);
+
+            final SendPort? mainAppPort =
+                IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+            mainAppPort?.send("InjectText:$formattedText");
+            
+            setState(() {
+              _bubbleState = 'IDLE';
+              _isLoading = false;
+            });
+            _speak("വിവരങ്ങൾ നൽകി.");
+          }
+        },
+      );
+    } else {
+      _speak("മൈക്ക് ലഭ്യമല്ല.");
+      setState(() => _bubbleState = 'IDLE');
     }
   }
 
@@ -337,13 +464,17 @@ class _OverlayBubbleState extends State<OverlayBubble> {
         );
       case 'CAMERA':
         return const Icon(Icons.camera_alt, color: Colors.white, size: 35);
+      case 'EMAIL_POPUP':
+        return const Icon(Icons.email_rounded, color: Colors.white, size: 35);
       case 'AUTO_WAIT':
+        // Spinner already shown via _isLoading when action is dispatched.
+        // This icon shows if bubble re-renders in this state.
         return const Padding(
-          padding: EdgeInsets.all(16.0),
-          child: CircularProgressIndicator(color: Colors.white),
+          padding: EdgeInsets.all(20.0),
+          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
         );
       case 'GUIDE_KEYBOARD':
-        return const Icon(Icons.lock, color: Colors.white, size: 35);
+        return const Icon(Icons.lock_rounded, color: Colors.white, size: 35);
       case 'PASTE':
         return const Icon(
           Icons.assignment_turned_in,

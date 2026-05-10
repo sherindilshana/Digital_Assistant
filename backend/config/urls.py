@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from assistant.views import TranslationView, FormAssistView, UniversalScanView  # <--- NEW: Import FormAssistView
+from assistant.views import TranslationView, FormAssistView, UniversalScanView, VoiceFormatView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -13,4 +13,7 @@ urlpatterns = [
 
     # Add this inside urlpatterns in urls.py
     path('api/universal-scan/', UniversalScanView.as_view(), name='universal_scan'),
+
+    # Voice formatting endpoint
+    path('api/format-voice/', VoiceFormatView.as_view(), name='format_voice'),
 ]

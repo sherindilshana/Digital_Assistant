@@ -29,7 +29,7 @@ def check_url_safety(url):
         return "✅ Safe source" 
 # Configure using the key from settings.py
 #genai.configure(api_key=settings.GEMINI_API_KEY)
-NEW_KEY = "AIzaSyCR6psw3SapqdMH9viyr9ZbCtq7YKedQY8"
+NEW_KEY = "AIzaSyD74mAecbYGg33g7yH7KOITKW1E7xhkoEs"
 genai.configure(api_key=NEW_KEY)
 
 class GeminiService:
@@ -110,19 +110,22 @@ class GeminiService:
             TASK:
             Extract every detail into a JSON dictionary using these EXACT keys:
             "full name", "dob", "gender", "id number", "ifsc", "account number", "consumer number",
-            "branch name", "full address", "house name", "street", "place", "district", "state", "pincode".
+            "bank name", "branch name", "full address", "house name", "street", "place", "district", "state", "pincode".
 
             RULES:
             1. NAME: Extract the person's full name exactly. Remove titles like "Mr." or "Smt.".
             2. BANK & UTILITY: For "account number", "consumer number", and "id number", extract ONLY digits.
-            3. IFSC: Extract exactly the 11-character alphanumeric code.
+            3. IFSC: Extract exactly the 11-character alphanumeric code. CRITICAL: The 5th character is ALWAYS the number '0' (Zero), NEVER the letter 'O'.
             4. BRANCH: Explicitly lookfor the name of the bank branch location.
             5. ADDRESS (FULL): The complete address exactly as it appears.
             6. ADDRESS (SPLIT): Break it down into "house name", "street", "place", "district", "state".
             7. PINCODE: Extract ONLY the 6-digit number.
-            8. CLEANING: Fix OCR errors (e.g., 'O' to '0' or 'I' to '1' in numbers and pincodes).
-            9. EMPTY FIELDS: If a piece of info is not found, use an empty string "".
-            10. RESPONSE: Respond ONLY with the JSON dictionary. No extra text.
+            8. GENDER: If you see "M" or "Male", output "Male". If "F" or "Female", output "Female".
+            9. CLEANING: Fix OCR errors (e.g., 'O' to '0' or 'I' to '1' in numbers and pincodes).
+            10. DOB: Format date of birth strictly as "DD/MM/YYYY" (e.g., "19/09/2004"). Do not use written months.
+            11. EMPTY FIELDS: If a piece of info is not found, use an empty string "".
+            12. BANK NAME: Extract the name of the Bank (e.g., "State Bank of India", "Union Bank").
+            13. RESPONSE: Respond ONLY with the JSON dictionary. No extra text.
             """
             response = model.generate_content(prompt)
             # Remove possible markdown formatting
@@ -139,3 +142,27 @@ class GeminiService:
         except Exception as e:
             print(f"Gemini Master Extraction Error: {e}")
             return {}
+
+    @staticmethod
+    def format_voice_input(raw_malayalam_audio):
+        try:
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            prompt = f"""
+            You are a data formatting assistant. The user spoke the following in Malayalam to fill a form: "{raw_malayalam_audio}"
+            
+            Convert this spoken text into a clean English format suitable for pasting into a form field.
+            
+            RULES:
+            1. If it's a Date of Birth (like "19 ബാർ പൂജ്യം 9 ബാർ 2004" or "19 09 2004"), format exactly as "DD/MM/YYYY" (e.g., "19/09/2004").
+            2. If it's a Phone Number or Pincode or Age, convert to pure English digits (e.g., "9876543210"). Remove spaces.
+            3. If it's a Name or Place, transliterate it cleanly into English.
+            4. If it's an Email Address (like "Riya Fathima K P 38@gmail.com" or "റിയ ഫാത്തിമ കെ പി 38@gmail.com"), format it properly into a valid lowercase email address without spaces (e.g. "riyafathimakp38@gmail.com").
+            5. Respond ONLY with the formatted text. Do not add any extra words.
+            """
+            response = model.generate_content(prompt)
+            formatted = response.text.strip()
+            print(f"Voice Formatted: '{raw_malayalam_audio}' -> '{formatted}'")
+            return formatted
+        except Exception as e:
+            print(f"Gemini Voice Format Error: {e}")
+            return raw_malayalam_audio

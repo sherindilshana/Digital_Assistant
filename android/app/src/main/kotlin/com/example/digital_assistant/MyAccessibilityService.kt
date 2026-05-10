@@ -1,5 +1,4 @@
 package com.example.digital_assistant
-
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
@@ -16,6 +15,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import android.os.Handler
 import android.os.Looper
+import io.flutter.plugin.common.MethodChannel
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -23,12 +23,18 @@ class MyAccessibilityService : AccessibilityService() {
         var instance: MyAccessibilityService? = null
     }
 
+    // 🎯 CRITICAL: Stores the exact field found by findNextEmptyField.
+    // When the user taps the mic/camera in the overlay, Android shifts input
+    // focus to the overlay window. This saved reference lets injectText()
+    // always inject into the CORRECT field, not just the first one on screen.
+    private var lastTargetField: AccessibilityNodeInfo? = null
+
     override fun onServiceConnected() {
         instance = this
         Log.d("Accessibility", "Service Connected")
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+
 
     override fun onInterrupt() {
         instance = null
@@ -88,31 +94,44 @@ class MyAccessibilityService : AccessibilityService() {
         } catch (e: IOException) { null }
     }
 
-    // --- FEATURE 3: SMART FIELD DETECTION (Search Bar Filter) ---
+    // --- FEATURE 3: SMART FIELD DETECTION ---
+    // Returns the next field that needs to be filled.
+    // If all fields are filled → returns "" → Flutter falls back to translation.
     fun getFormFields(): String {
         val rootNode = rootInActiveWindow ?: return ""
         val focusedNode = rootNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        
+
         if (focusedNode != null && focusedNode.isEditable) {
             val id = focusedNode.viewIdResourceName ?: ""
+            // Skip browser address bars and search boxes
             if (id.contains("url_bar") || id.contains("search_box") || id.contains("omnibox")) {
-                val sb = StringBuilder()
-                findEditableNodes(rootNode, sb)
-                return sb.toString()
+                // On a browser/search screen — return empty to trigger translation
+                return ""
             }
-            return "[FIELD]: ${focusedNode.hintText ?: focusedNode.text ?: "Field"}\n"
+
+            val currentText = focusedNode.text?.toString() ?: ""
+            if (currentText.isEmpty()) {
+                // ✅ CASE 1: Focused field is EMPTY → this is what needs to be filled
+                val prefix = if (focusedNode.isPassword) "[PASSWORD]" else "[FIELD]"
+                return "$prefix: ${focusedNode.hintText ?: "Field"}\n"
+            } else {
+                // ✅ CASE 2: Focused field is ALREADY FILLED → skip to next empty field
+                return findNextEmptyField() ?: ""
+            }
         }
-        val sb = StringBuilder()
-        findEditableNodes(rootNode, sb)
-        return sb.toString()
+
+        // ✅ CASE 3: No focused field → find first empty field in form
+        return findNextEmptyField() ?: ""
     }
 
     private fun findEditableNodes(node: AccessibilityNodeInfo, sb: StringBuilder) {
         if (!node.isVisibleToUser) return
         val id = node.viewIdResourceName ?: ""
         if (id.contains("url_bar") || id.contains("search_box")) return
-        if (node.isEditable && !node.isPassword) {
-            sb.append("[FIELD]: ${node.hintText ?: node.text ?: "Field"}\n")
+        if (node.isEditable) {
+            // 🛡️ Distinguish password vs normal field
+            val prefix = if (node.isPassword) "[PASSWORD]" else "[FIELD]"
+            sb.append("$prefix: ${node.hintText ?: node.text ?: "Field"}\n")
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
@@ -147,12 +166,17 @@ class MyAccessibilityService : AccessibilityService() {
         mainHandler.post(runnable)
     }
 
-    private fun fillNodesRecursively(node: AccessibilityNodeInfo, dataMap: Map<String, String>): Boolean {
+    private fun fillNodesRecursively(rootNode: AccessibilityNodeInfo, dataMap: Map<String, String>): Boolean {
         var anyFilled = false
-        // 🛡️ Ensure we are looking at a fresh tree
-        node.refresh()
+        rootNode.refresh()
 
-        if (node.isVisibleToUser) {
+        val flatList = mutableListOf<AccessibilityNodeInfo>()
+        flattenTree(rootNode, flatList)
+
+        for (i in 0 until flatList.size) {
+            val node = flatList[i]
+            if (!node.isVisibleToUser) continue
+
             val hint = (node.hintText?.toString() ?: "").lowercase()
             val contentDesc = (node.contentDescription?.toString() ?: "").lowercase()
             val text = (node.text?.toString() ?: "").lowercase()
@@ -165,32 +189,58 @@ class MyAccessibilityService : AccessibilityService() {
                 // 🛡️ UNIVERSAL MATCHING
                 val isMatch = when (key) {
                     // 🛡️ NAME: Prevents Account Number overwrite
-                    "full name" -> (identifier.contains("name") || identifier.contains("holder")) && 
-                                   !identifier.contains("number") && !identifier.contains("no")
-                    
+                    "full name" -> (identifier.contains("name") || identifier.contains("holder")) &&
+                                   !identifier.contains("number") && !identifier.contains("no") &&
+                                   !identifier.contains("user") && !identifier.contains("brand") &&
+                                   !identifier.contains("bank") && !identifier.contains("branch")
+
                     // 🛡️ ACCOUNT NUMBER: Strict digits check
-                    "account number" -> identifier.contains("account") && (identifier.contains("number") || identifier.contains("no")) && 
+                    "account number" -> identifier.contains("account") && (identifier.contains("number") || identifier.contains("no")) &&
                                         !identifier.contains("name") && !identifier.contains("holder")
-                    
+
                     // 🛡️ GENDER & IDENTITY
-                    "gender" -> identifier.contains("gender") || identifier.contains("sex") || 
+                    "gender" -> identifier.contains("gender") || identifier.contains("sex") ||
                                 identifier.contains("male") || identifier.contains("female")
-                    "id number" -> (identifier.contains("id") || identifier.contains("aadhaar") || identifier.contains("aadhar")) && !identifier.contains("mobile")
-                    "dob" -> identifier.contains("dob") || identifier.contains("birth") || identifier.contains("date")
+                    "id number" -> (identifier.contains("id") || identifier.contains("aadhaar") ||
+                                    identifier.contains("aadhar") || identifier.contains("adhaar") ||
+                                    identifier.contains("uid")) && !identifier.contains("mobile")
+
+                    // 🛡️ DOB: Comprehensive matching for ALL common form field labels
+                    "dob" -> identifier.contains("dob") ||
+                             identifier.contains("d.o.b") ||
+                             identifier.contains("date of birth") ||
+                             identifier.contains("birth date") ||
+                             identifier.contains("birthdate") ||
+                             identifier.contains("birthday") ||
+                             identifier.contains("birth year") ||
+                             identifier.contains("year of birth") ||
+                             (identifier.contains("date") && identifier.contains("birth")) ||
+                             // Match standalone 'date' ONLY if no other date context overrides it
+                             (identifier.contains("date") &&
+                              !identifier.contains("update") &&
+                              !identifier.contains("creat") &&
+                              !identifier.contains("issue") &&
+                              !identifier.contains("expir") &&
+                              !identifier.contains("valid") &&
+                              !identifier.contains("from") &&
+                              !identifier.contains("to"))
 
                     // 🛡️ BANK DETAILS
-                    "ifsc" -> identifier.contains("ifsc") || identifier.contains("code")
+                    "bank name" -> identifier.contains("bank") && (identifier.contains("name") || !identifier.contains("account"))
+                    "ifsc" -> identifier.contains("ifsc") || identifier.contains("ifsc code") ||
+                               (identifier.contains("code") && !identifier.contains("pin"))
                     "branch name" -> identifier.contains("branch") || identifier.contains("office")
-                    
-                    // 🛡️ ADDRESS SPLIT (REPLACED & COMPLETE)
-                    "pincode" -> identifier.contains("pincode") || identifier.contains("pin") || identifier.contains("zip")
+
+                    // 🛡️ ADDRESS SPLIT
+                    "pincode" -> identifier.contains("pincode") || identifier.contains("pin code") ||
+                                  identifier.contains("postal") || identifier.contains("zip")
                     "full address" -> identifier.contains("address") && !identifier.contains("house") && !identifier.contains("street")
                     "house name" -> identifier.contains("house") || identifier.contains("building") || identifier.contains("home")
                     "street" -> identifier.contains("street") || identifier.contains("road") || identifier.contains("lane")
                     "place" -> identifier.contains("place") || identifier.contains("city") || identifier.contains("town") || identifier.contains("location")
                     "district" -> identifier.contains("district") || identifier.contains("dist")
                     "state" -> identifier.contains("state")
-                    
+
                     // 🛡️ UTILITIES
                     "consumer number" -> identifier.contains("consumer") || identifier.contains("customer") || identifier.contains("con no")
 
@@ -198,19 +248,62 @@ class MyAccessibilityService : AccessibilityService() {
                 }
 
                 if (isMatch) {
-                    // 🎯 STEP 1: If it's a box, type.
+                    // 🎯 STEP 1: If it's an editable box, type into it.
                     if (node.isEditable) {
                         injectToNode(node, value, key)
                         anyFilled = true
-                    } 
-                    // 🎯 STEP 2: If it's a radio button (Gender), click.
-                    else if (identifier.contains(targetVal) && (node.isClickable || node.isCheckable)) {
-                        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        anyFilled = true
                     }
-                    // 🎯 STEP 3: If it's just a label, find the box next to it.
+                    // 🎯 STEP 2: If it's a radio/checkbox that matches the value label, click it.
+                    else if (identifier.contains(targetVal)) {
+                        if (node.isClickable || node.isCheckable) {
+                            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            anyFilled = true
+                        } else {
+                            var ancestor = node.parent
+                            var found = false
+                            var depth = 0
+                            while (ancestor != null && depth < 4) {
+                                if (ancestor.isClickable || ancestor.isCheckable) {
+                                    ancestor.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                    found = true
+                                    anyFilled = true
+                                    break
+                                }
+                                ancestor = ancestor.parent
+                                depth++
+                            }
+                            if (!found) {
+                                var inputNode: AccessibilityNodeInfo? = null
+                                for (j in i + 1 until flatList.size) {
+                                    val candidate = flatList[j]
+                                    if (candidate.isEditable && candidate.isVisibleToUser) {
+                                        val currentText = candidate.text?.toString() ?: ""
+                                        if (currentText.isEmpty()) {
+                                            inputNode = candidate
+                                            break
+                                        }
+                                    }
+                                }
+                                if (inputNode != null) {
+                                    injectToNode(inputNode, value, key)
+                                    anyFilled = true
+                                }
+                            }
+                        }
+                    }
+                    // 🎯 STEP 3: Label match — search deep for the associated editable field
                     else {
-                        val inputNode = findNearestInput(node)
+                        var inputNode: AccessibilityNodeInfo? = null
+                        for (j in i + 1 until flatList.size) {
+                            val candidate = flatList[j]
+                            if (candidate.isEditable && candidate.isVisibleToUser) {
+                                val currentText = candidate.text?.toString() ?: ""
+                                if (currentText.isEmpty()) {
+                                    inputNode = candidate
+                                    break
+                                }
+                            }
+                        }
                         if (inputNode != null) {
                             injectToNode(inputNode, value, key)
                             anyFilled = true
@@ -219,19 +312,21 @@ class MyAccessibilityService : AccessibilityService() {
                 }
             }
         }
-
-        
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            if (fillNodesRecursively(child, dataMap)) anyFilled = true
-        }
         return anyFilled
     }
+
+    private fun flattenTree(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
+        if (node == null) return
+        list.add(node)
+        for (i in 0 until node.childCount) {
+            flattenTree(node.getChild(i), list)
+        }
+    }
+
     private fun injectToNode(node: AccessibilityNodeInfo, value: String, key: String) {
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
 
-        // 🛡️ EMERGENCY FIX: Clear the field first so data doesn't mix
         val clearArgs = Bundle()
         clearArgs.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, clearArgs)
@@ -243,51 +338,71 @@ class MyAccessibilityService : AccessibilityService() {
 
         var success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
-        // 🔥 FALLBACK: Paste works where SetText is blocked
         if (!success) {
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText("label", value))
             node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
         }
     }
-
-    private fun findNearestInput(startNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val parent = startNode.parent ?: return null
-        for (i in 0 until parent.childCount) {
-            val sibling = parent.getChild(i) ?: continue
-            if (sibling.isEditable) return sibling
-        }
-        val grandParent = parent.parent ?: return null
-        for (i in 0 until grandParent.childCount) {
-            val cousin = grandParent.getChild(i) ?: continue
-            if (cousin.isEditable) return cousin
-            for (j in 0 until cousin.childCount) {
-                val subCousin = cousin.getChild(j) ?: continue
-                if (subCousin.isEditable) return subCousin
-            }
-        }
-        return null
-    }
-    // --- FEATURE 5: SINGLE INJECTION FALLBACK ---
+    // --- FEATURE 5: VOICE TEXT INJECTION ---
+    // Injects text into the saved target field from findNextEmptyField().
+    // This is necessary because the overlay mic button steals input focus
+    // away from the form field while the user is speaking.
     fun injectText(textToInject: String): Boolean {
         try {
             val rootNode = rootInActiveWindow ?: return false
             rootNode.refresh()
+
+            // 🎯 PRIORITY 1: Use the SAVED field from findNextEmptyField()
+            // This is the field we identified as the target BEFORE the mic was tapped.
+            val saved = lastTargetField
+            if (saved != null) {
+                saved.refresh()
+                if (saved.isVisibleToUser && saved.isEditable) {
+                    saved.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                    saved.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Thread.sleep(150)
+                    val args = Bundle()
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToInject)
+                    val success = saved.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    lastTargetField = null // Clear after successful use
+                    if (success) return true
+                    // Fallback: clipboard paste on same field
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("voice", textToInject))
+                    val pasted = saved.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    if (pasted) return true
+                }
+                lastTargetField = null
+            }
+
+            // 🛡️ PRIORITY 2: Currently focused field (if saved field unavailable)
+            val focusedNode = rootNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focusedNode != null && focusedNode.isEditable && focusedNode.isVisibleToUser) {
+                val id = focusedNode.viewIdResourceName ?: ""
+                if (!id.contains("url_bar") && !id.contains("search_box") && !id.contains("omnibox")) {
+                    focusedNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Thread.sleep(150)
+                    val args = Bundle()
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToInject)
+                    val success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    if (success) return true
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("voice", textToInject))
+                    return focusedNode.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                }
+            }
+
+            // 🛡️ PRIORITY 3: Fallback - first visible empty form field
             val targetNode = findVisibleFormBox(rootNode)
-            
             if (targetNode != null) {
                 targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
                 targetNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                
                 Thread.sleep(200)
-
                 val arguments = Bundle()
                 arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToInject)
-                
                 var success = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-                if (!success) {
-                    success = targetNode.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                }
+                if (!success) success = targetNode.performAction(AccessibilityNodeInfo.ACTION_PASTE)
                 return success
             }
             return false
@@ -304,11 +419,35 @@ class MyAccessibilityService : AccessibilityService() {
         }
         return null
     }
-    // 🛡️ THE MISSING FUNCTION: Searches for the next blank box
+    // 🛡️ THE MISSING FUNCTION: Searches for the next blank box, with auto-scroll!
     fun findNextEmptyField(): String? {
-        val rootNode = rootInActiveWindow ?: return null
+        var rootNode = rootInActiveWindow ?: return null
         rootNode.refresh()
-        return searchForEmpty(rootNode)
+        var result = searchForEmpty(rootNode)
+        
+        // 🛡️ If no empty fields found, try scrolling down to see off-screen fields!
+        if (result == null) {
+            val scrollable = findScrollableNode(rootNode)
+            if (scrollable != null) {
+                Log.d("Assistant", "No empty fields visible. Scrolling forward...")
+                scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                try { Thread.sleep(800) } catch (e: Exception) {} // Wait for scroll animation
+                
+                rootNode = rootInActiveWindow ?: return null
+                rootNode.refresh()
+                result = searchForEmpty(rootNode)
+            }
+        }
+        return result
+    }
+
+    private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            val res = findScrollableNode(node.getChild(i) ?: continue)
+            if (res != null) return res
+        }
+        return null
     }
 
     private fun searchForEmpty(node: AccessibilityNodeInfo): String? {
@@ -320,10 +459,15 @@ class MyAccessibilityService : AccessibilityService() {
             // Skip browser bars and fields that already have data
             if (!id.contains("url_bar") && !id.contains("search_box") && currentText.isEmpty()) {
                 val hint = node.hintText?.toString() ?: "Field"
+                val prefix = if (node.isPassword) "[PASSWORD]" else "[FIELD]"
                 
-                // Focus the field so the user sees the cursor jump
+                // 🎯 SAVE the exact node so injectText() can find it later
+                // even after the overlay mic steals input focus away.
+                lastTargetField = node
+                
+                // Focus the field so the cursor jumps visually
                 node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                return hint
+                return "$prefix: $hint"
             }
         }
         for (i in 0 until node.childCount) {
@@ -331,5 +475,52 @@ class MyAccessibilityService : AccessibilityService() {
             if (result != null) return result
         }
         return null
+    }
+
+    // --- OTP WATCH: Listen for notifications that contain OTP digits ---
+    private var otpWatchActive = false
+    fun startWatchingForOtp() {
+        otpWatchActive = true
+        Log.d("Assistant", "OTP watch started")
+        // The onAccessibilityEvent below handles the actual OTP capture.
+        // This function just flips the flag so we process OTP events.
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!otpWatchActive) return
+        if (event == null) return
+
+        // Capture notification banners for OTP
+        if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+
+            val text = event.text.joinToString(" ")
+            // Look for 4-8 digit OTP in the notification text
+            val otpRegex = Regex("\\b(\\d{4,8})\\b")
+            val match = otpRegex.find(text)
+            if (match != null) {
+                val otp = match.value
+                Log.d("Assistant", "OTP detected: $otp")
+                otpWatchActive = false // Stop watching after we find it
+
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val rootNode = rootInActiveWindow ?: return@postDelayed
+                    rootNode.refresh()
+                    val target = findVisibleFormBox(rootNode)
+                    if (target != null) {
+                        injectToNode(target, otp, "otp")
+                        // Notify Flutter bubble that OTP was filled
+                        try {
+                            val channel = MethodChannel(
+                                com.example.digital_assistant.MainActivityRef.binaryMessenger!!,
+                                "com.example.digital_assistant/accessibility"
+                            )
+                        } catch (e: Exception) {
+                            Log.d("Assistant", "OTP filled, notify via shareData not available here")
+                        }
+                    }
+                }, 500)
+            }
+        }
     }
 }
