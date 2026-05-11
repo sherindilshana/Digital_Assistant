@@ -102,6 +102,10 @@ class _OverlayBubbleState extends State<OverlayBubble> {
             _isLoading = false;
           });
         }
+        // 8. General TTS commands
+        else if (data.startsWith("TTS:")) {
+          _speak(data.substring(4));
+        }
       }
     });
   }
@@ -166,13 +170,9 @@ class _OverlayBubbleState extends State<OverlayBubble> {
       // OTP mode: already waiting, just remind the user
       _speak("OTP വരുന്നത് കാത്തിരിക്കുന്നു. ഞാൻ തനിയെ പൂരിപ്പിക്കാം.");
       return;
-    } else if (_bubbleState == 'GUIDE_KEYBOARD') {
-      // Password mode: guide the user, do NOT auto-fill for security
-      _speak("ഇവിടെ നിങ്ങളുടെ രഹസ്യ പാസ്‌വേഡ് ആണ് വേണ്ടത്. ഫോണിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് ഉപയോഗിക്കുക, ഓർമ്മയുണ്ടെങ്കിൽ ടൈപ്പ് ചെയ്യുക.");
-      setState(() {
-        _bubbleState = 'IDLE';
-        _isLoading = false;
-      });
+    } else if (_bubbleState == 'GUIDE_KEYBOARD' || _bubbleState == 'PASSWORD_PROMPT') {
+      // Repeat prompt safely if they tap the background
+      _speak("പാസ്‌വേഡ് അറിയാമെങ്കിൽ 'അതെ' എന്ന് അമർത്തുക. അറിയില്ലെങ്കിൽ 'ഇല്ല' എന്ന് അമർത്തുക.");
       return;
     }
 
@@ -207,19 +207,18 @@ class _OverlayBubbleState extends State<OverlayBubble> {
 
       final String currentField = formFieldsText.split('\n').first;
 
-      // 🛡️ PASSWORD SHORTCUT: Go directly to GUIDE_KEYBOARD — no backend call needed
+      // 🛡️ PASSWORD SHORTCUT: Go directly to PASSWORD_PROMPT — no backend call needed
       if (currentField.startsWith('[PASSWORD]')) {
         _speak(
-          "ഇവിടെ നിങ്ങളുടെ രഹസ്യ പാസ്\u200cവേഡ് ആണ് വേണ്ടത്. "
-          "ഫോണിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് ഉപയോഗിക്കുക, "
-          "ഓർമ്മയുണ്ടെങ്കിൽ ടൈപ്പ് ചെയ്യുക.",
+          "പാസ്‌വേഡ് സേവ് ചെയ്തിട്ടില്ലെങ്കിൽ, താങ്കൾക്ക് അറിയാമെങ്കിൽ 'അതെ' എന്ന് അമർത്തുക. അറിയില്ലെങ്കിൽ 'ഇല്ല' എന്ന് അമർത്തുക.",
         );
         if (mounted) {
           setState(() {
-            _bubbleState = 'GUIDE_KEYBOARD';
+            _bubbleState = 'PASSWORD_PROMPT';
             _isLoading = false;
           });
         }
+        FlutterOverlayWindow.resizeOverlay(250, 90, true);
         return;
       }
 
@@ -425,31 +424,58 @@ class _OverlayBubbleState extends State<OverlayBubble> {
     return Material(
       color: Colors.transparent,
       child: Center(
-        child: GestureDetector(
-          onTap: _handleSmartTap,
-          child:
-              _isLoading
+        child: _bubbleState == 'PASSWORD_PROMPT'
+          ? Container(
+              height: 70,
+              width: 230,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(35),
+                border: Border.all(color: const Color(0xFF6A11CB), width: 2),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 8)],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  TextButton.icon(
+                    onPressed: () {
+                      FlutterOverlayWindow.resizeOverlay(90, 90, true);
+                      setState(() => _bubbleState = 'IDLE');
+                      _startVoiceInput();
+                    },
+                    icon: const Icon(Icons.mic, color: Colors.green, size: 24),
+                    label: const Text("അതെ", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 18)),
+                  ),
+                  Container(width: 1, color: Colors.grey.shade300, height: 40),
+                  TextButton.icon(
+                    onPressed: () {
+                      FlutterOverlayWindow.resizeOverlay(90, 90, true);
+                      setState(() => _bubbleState = 'IDLE');
+                      final SendPort? mainAppPort = IsolateNameServer.lookupPortByName('ASSISTANT_PORT');
+                      mainAppPort?.send("CLICK_FORGOT_PASSWORD");
+                    },
+                    icon: const Icon(Icons.touch_app, color: Colors.red, size: 24),
+                    label: const Text("ഇല്ല", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 18)),
+                  ),
+                ],
+              ),
+            )
+          : GestureDetector(
+              onTap: _handleSmartTap,
+              child: _isLoading
                   ? const CircularProgressIndicator(color: Color(0xFF6A11CB))
                   : Container(
-                    height: 90,
-                    width: 90,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color:
-                          _bubbleState == 'IDLE'
-                              ? Colors.white
-                              : Colors.orangeAccent,
-                      border: Border.all(
-                        color: const Color(0xFF6A11CB),
-                        width: 2,
+                      height: 90,
+                      width: 90,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _bubbleState == 'IDLE' ? Colors.white : Colors.orangeAccent,
+                        border: Border.all(color: const Color(0xFF6A11CB), width: 2),
+                        boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 8)],
                       ),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black45, blurRadius: 8),
-                      ],
+                      child: _buildDynamicIcon(),
                     ),
-                    child: _buildDynamicIcon(),
-                  ),
-        ),
+            ),
       ),
     );
   }

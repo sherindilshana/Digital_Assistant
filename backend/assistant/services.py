@@ -29,7 +29,7 @@ def check_url_safety(url):
         return "✅ Safe source" 
 # Configure using the key from settings.py
 #genai.configure(api_key=settings.GEMINI_API_KEY)
-NEW_KEY = "AIzaSyD74mAecbYGg33g7yH7KOITKW1E7xhkoEs"
+NEW_KEY = "AIzaSyDIyXaQbctN0FADdi8UkJCpjl9vnD3fJ1U"
 genai.configure(api_key=NEW_KEY)
 
 class GeminiService:
@@ -77,8 +77,7 @@ class GeminiService:
             4. AUTO_WAIT: MUST use for OTP / One-Time Passwords.
                -> If AUTO_WAIT, 'malayalam_audio' MUST be EXACTLY: "മെസ്സേജ് വരാൻ കാത്തിരിക്കുന്നു. ഞാൻ തനിയെ പൂരിപ്പിക്കാം."
             5. GUIDE_KEYBOARD: MUST use for Passwords, MPINs, Secret Codes.
-               -> If GUIDE_KEYBOARD, 'malayalam_audio' MUST be EXACTLY: "ഇവിടെ പാസ്‌വേഡ് ആണ് വേണ്ടത്. ഗൂഗിൾ പാസ്‌വേഡ് മാനേജറിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് തനിയെ പൂരിപ്പിക്കും. അല്ലെങ്കിൽ നിങ്ങൾക്ക് ടൈപ്പ് ചെയ്യാം, അല്ലെങ്കിൽ ഈ ബട്ടണിൽ തൊട്ട് പറയാവുന്നതാണ്. ഇതൊന്നും സാധ്യമല്ലെങ്കിൽ, താഴെയുള്ള ഫോർഗോട്ട് പാസ്‌വേഡ് എടുക്കുക."
-            
+               -> If GUIDE_KEYBOARD, 'malayalam_audio' MUST be EXACTLY: "ഇവിടെ പാസ്‌വേഡ് ആണ് വേണ്ടത്. ഗൂഗിൾ പാസ്‌വേഡ് മാനേജറിൽ സേവ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് തനിയെ പൂരിപ്പിക്കും. അല്ലെങ്കിൽ നിങ്ങൾക്ക് ടൈപ്പ് ചെയ്യാം, അല്ലെങ്കിൽ ഈ ബട്ടണിൽ തൊട്ട് പറയാവുന്നതാണ്. ഇതൊന്നും സാധ്യമല്ലെങ്കിൽ, താഴെയുള്ള ഫോർഗോട്ട് പാസ്‌വേഡ് എടുക്കുക." 
             Respond ONLY with a valid JSON dictionary:
             {{
                 "action": "THE_ACTION_CHOSEN",

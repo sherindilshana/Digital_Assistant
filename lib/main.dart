@@ -69,6 +69,20 @@ void _setupPort() {
     else if (message == "START_OTP_WATCH") {
       await _startOtpWatch();
     }
+    // --- FORGOT PASSWORD: Tell Kotlin to find and click the reset link ---
+    else if (message == "CLICK_FORGOT_PASSWORD") {
+      try {
+        const platform = MethodChannel('com.example.digital_assistant/accessibility');
+        final bool success = await platform.invokeMethod('clickForgotPassword') ?? false;
+        if (success) {
+          await FlutterOverlayWindow.shareData("TTS:പാസ്‌വേഡ് മാറ്റാനുള്ള ലിങ്കിൽ തൊടാൻ ശ്രമിച്ചിട്ടുണ്ട്. അത് ശരിയായില്ലെങ്കിൽ, താങ്കൾ തന്നെ ആ ലിങ്കിൽ തൊടുക.");
+        } else {
+          await FlutterOverlayWindow.shareData("TTS:ക്ഷമിക്കണം, ഫോർഗോട്ട് പാസ്‌വേഡ് ലിങ്ക് കണ്ടെത്താൻ കഴിഞ്ഞില്ല. താങ്കൾ തന്നെ അത് കണ്ടെത്തുക.");
+        }
+      } catch (e) {
+        print("Click Forgot Password Error: \$e");
+      }
+    }
   });
 }
 

@@ -97,6 +97,11 @@ class MainActivity: FlutterActivity() {
                 // monitoring notifications. Here we just acknowledge.
                 service.startWatchingForOtp()
                 result.success("OTP watch started")
+            }
+            // 🛡️ NEW: FORGOT PASSWORD CLICKER
+            else if (call.method == "clickForgotPassword") {
+                val success = service.clickForgotPassword()
+                result.success(success)
             } else {
                 result.notImplemented()
             }

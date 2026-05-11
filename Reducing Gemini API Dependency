@@ -1,0 +1,43 @@
+# Reducing Gemini API Dependency
+
+Currently, the system relies heavily on the Gemini API for translation, form field analysis, data extraction, and formatting. We can significantly reduce the number of API calls, which will improve response speed, allow more offline capabilities, and reduce costs.
+
+## Proposed Optimizations
+
+Here is a 4-step plan to systematically reduce Gemini API calls:
+
+### 1. Heuristic-Based Form Field Routing (100% Reduction for this task)
+Currently, `get_form_action` sends the `field_hint` to Gemini to decide if the user should use Voice, Camera, Email, etc. This is overkill. We can replace this entirely with a local Python dictionary matching keywords.
+- **[MODIFY]** `backend/assistant/services.py`
+  - Rewrite `get_form_action` to use regex/string matching.
+  - Example: If `field_hint` contains "email" -> `EMAIL_POPUP`. If "name", "aadhaar" -> `CAMERA`.
+  - *Impact*: Saves 1 API call every time the user taps a form field.
+
+### 2. Database Caching for Translations
+App interfaces have lots of static text ("Submit", "Next", "Login", "Profile"). We shouldn't translate these repeatedly.
+- **[NEW]** `backend/assistant/models.py`: Create a `TranslationCache` model to store English Text -> Malayalam Translation.
+- **[MODIFY]** `backend/assistant/views.py`: Before calling Gemini in `TranslationView`, check the cache. If it exists, return it immediately. If not, call Gemini and save the result to the cache.
+- *Impact*: Massive reduction in API calls for repeated screens and static apps.
+
+### 3. Local Formatting for Voice Numbers & Dates
+When a user speaks a date or phone number in Malayalam (e.g., "തൊണ്ണൂറ്റി എട്ട്..."), we currently use Gemini to convert it to digits.
+- **[MODIFY]** `backend/assistant/services.py`
+  - Update `format_voice_input` to first attempt a local dictionary translation of Malayalam number words to digits.
+  - If the string only contains numbers and basic date markers (like "ബാർ" for "/"), format it locally.
+  - Only fallback to Gemini if the text contains complex strings (like transliterating a name or email).
+  - *Impact*: Faster number and date entry without API overhead.
+
+### 4. Regex Fast-Path for ID Extraction
+Extracting data from ID cards is complex, but standardized IDs like Aadhaar, PAN, and IFSC have strict formats.
+- **[MODIFY]** `backend/assistant/services.py`
+  - Update `extract_universal_id_data` to first run Python Regex to hunt for standard patterns (Aadhaar `\d{4} \d{4} \d{4}`, PAN `[A-Z]{5}[0-9]{4}[A-Z]{1}`, Dates `\d{2}/\d{2}/\d{4}`).
+  - Only if the regex fails to find the required fields, we fallback to the Gemini API.
+
+---
+
+> [!IMPORTANT]
+> **User Review Required**
+> 1. Do you want to implement **all four** of these optimizations, or should we focus on just one or two (e.g., just the caching and form routing first, as they are the easiest and most impactful)?
+> 2. For the Database Cache, we will need to run a migration (`python manage.py makemigrations` and `migrate`). Is that okay?
+
+Please let me know if you approve this approach or have any specific preferences!

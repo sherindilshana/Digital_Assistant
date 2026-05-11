@@ -139,6 +139,47 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
+    // --- FEATURE: FORGOT PASSWORD CLICKER ---
+    fun clickForgotPassword(): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        rootNode.refresh()
+
+        val flatList = mutableListOf<AccessibilityNodeInfo>()
+        flattenTree(rootNode, flatList)
+
+        for (node in flatList) {
+            if (!node.isVisibleToUser) continue
+            val text = (node.text?.toString() ?: "").lowercase()
+            val contentDesc = (node.contentDescription?.toString() ?: "").lowercase()
+            val identifier = "$text $contentDesc"
+
+            if (identifier.contains("forgot") || identifier.contains("മറന്നോ") || 
+                identifier.contains("reset") || identifier.contains("trouble") ||
+                identifier.contains("forget")) {
+                
+                // Ensure it is actually clickable or has a clickable parent
+                if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    return true
+                } else {
+                    var ancestor = node.parent
+                    var depth = 0
+                    while (ancestor != null && depth < 3) {
+                        if (ancestor.isClickable) {
+                            ancestor.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+                            ancestor.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            return true
+                        }
+                        ancestor = ancestor.parent
+                        depth++
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     // =======================================================
     // --- FEATURE 4: UNIVERSAL AUTO-FILL ENGINE (NEW) ---
     // =======================================================
